@@ -395,7 +395,7 @@ export default function DesertRouteOptimizer() {
       <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-red-600 text-white p-6 shadow-lg">
         <div className="max-w-7xl mx-auto flex items-center gap-3">
           <Camel className="w-8 h-8" />
-          <h1 className="text-3xl font-bold">Desert Route Optimizer</h1>
+          <h1 className="text-3xl font-bold">Hops On The Way</h1>
           <div className="ml-auto text-sm opacity-90">
             Multi-stop journey planner
           </div>
