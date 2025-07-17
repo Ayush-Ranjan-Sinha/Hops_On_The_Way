@@ -14,10 +14,12 @@ import {
   X,
   AlertTriangle,
   Info,
+  ArrowDownUp,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { RouteHopCard } from "@/components/route-hop-card";
 import { RouteSummary } from "@/components/route-summary";
+import clsx from "clsx"; // optional, makes class toggling easier
 
 // Dynamically import the map component to avoid SSR issues
 const MapComponent = dynamic(() => import("@/components/map-component"), {
@@ -93,6 +95,31 @@ export default function DesertRouteOptimizer() {
   const searchTimeoutRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
 
   const hopCount = waypoints.filter((w) => w.type === "hop").length;
+  const [theme, setTheme] = useState<"bright" | "dark">("bright");
+
+  const themeColors: Record<string, string> = {
+    bright: "bg-[#f07c4a]",
+    dark: "bg-[#1f1a1f]",
+  };
+  const getBackgroundClass = () => {
+    switch (theme) {
+      case "dark":
+        return "bg-gradient-to-br from-[#0f0f10] via-[#1a1a1d] to-[#2c2f33] text-white";
+      case "bright":
+      default:
+        return "bg-gradient-to-br from-[#fff8e1] via-[#ffe0b2] to-[#ffcc80] text-gray-900";
+    }
+  };
+
+  const getHeaderClass = () => {
+    switch (theme) {
+      case "dark":
+        return "bg-gradient-to-r from-[#111827] via-[#1f2937] to-[#374151] ";
+      case "bright":
+      default:
+        return "bg-gradient-to-r from-amber-600 via-orange-600 to-red-600 ";
+    }
+  };
 
   // Check for duplicate locations
   const checkForDuplicates = (
@@ -115,9 +142,45 @@ export default function DesertRouteOptimizer() {
     });
   };
 
+  const handleSwapStartEnd = () => {
+    setWaypoints((prevWaypoints) => {
+      const startIndex = prevWaypoints.findIndex((w) => w.type === "start");
+      const destIndex = prevWaypoints.findIndex(
+        (w) => w.type === "destination"
+      );
+
+      if (startIndex === -1 || destIndex === -1) return prevWaypoints;
+
+      const newWaypoints = [...prevWaypoints];
+
+      // Swap all relevant fields (not just location)
+      const temp = { ...newWaypoints[startIndex] };
+
+      newWaypoints[startIndex] = {
+        ...newWaypoints[destIndex],
+        type: "start",
+        id: "start", // ensure ID stays consistent if needed
+      };
+
+      newWaypoints[destIndex] = {
+        ...temp,
+        type: "destination",
+        id: "destination",
+      };
+
+      return newWaypoints;
+    });
+  };
+
   // Add a new hop
   const addHop = () => {
     if (hopCount >= MAX_HOPS) return;
+
+    // Prevent adding a new hop if there's already an empty one
+    const hasEmptyHop = waypoints.some(
+      (w) => w.type === "hop" && (!w.query || w.query.trim() === "")
+    );
+    if (hasEmptyHop) return;
 
     const newHop: Waypoint = {
       id: `hop-${Date.now()}-${Math.random()}`,
@@ -390,19 +453,39 @@ export default function DesertRouteOptimizer() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-red-100">
+    <div className={`flex flex-col min-h-screen ${getBackgroundClass()}`}>
       {/* Header */}
-      <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-red-600 text-white p-6 shadow-lg">
+      <div className={` text-white p-6 shadow-lg ${getHeaderClass()}`}>
         <div className="max-w-7xl mx-auto flex items-center gap-3">
           <Camel className="w-8 h-8" />
           <h1 className="text-3xl font-bold">Hops On The Way</h1>
           <div className="ml-auto text-sm opacity-90">
             Multi-stop journey planner
           </div>
+
+          <div className="ml-auto flex items-center space-x-3">
+            {/* Toggle buttons */}
+            <div className="flex bg-transparent rounded-full shadow-inner p-1 text-xs">
+              {(["bright", "dark"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setTheme(mode)}
+                  className={clsx(
+                    "px-2 py-1 rounded-full transition-all duration-200 border-0 outline-none focus:ring-0",
+                    theme === mode
+                      ? `${themeColors[mode]} text-transparent shadow-md`
+                      : "text-white hover:bg-gray-200"
+                  )}
+                >
+                  {mode === "bright" ? "Bright" : "Dark"}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto p-6 grid lg:grid-cols-3 gap-6">
+      <div className="flex-grow max-w-7xl mx-auto p-6 grid lg:grid-cols-3 gap-6">
         {/* Waypoints Panel */}
         <div className="lg:col-span-1 space-y-4">
           <Card className="bg-white/80 backdrop-blur-sm border-amber-200 shadow-xl">
@@ -442,6 +525,17 @@ export default function DesertRouteOptimizer() {
                         className="ml-auto h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
                       >
                         <X className="w-3 h-3" />
+                      </Button>
+                    )}
+
+                    {waypoint.type === "start" && (
+                      <Button
+                        onClick={() => handleSwapStartEnd()}
+                        size="sm"
+                        variant="ghost"
+                        className="ml-auto h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+                      >
+                        <ArrowDownUp className="w-3 h-3 text-black" />
                       </Button>
                     )}
                   </div>
@@ -603,7 +697,8 @@ export default function DesertRouteOptimizer() {
                   <strong>{optimizedRoute.distance}</strong> in{" "}
                   <strong>{optimizedRoute.duration}</strong>. This sequence is
                   optimized by the TSP algorithm.
-                </AlertDescription>
+                </AlertDescription>{" "}
+                by OpenStreetMap & OSRM TSP Algorithm
               </Alert>
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {optimizedRoute.waypoints.map((waypoint, index) => (
@@ -621,10 +716,10 @@ export default function DesertRouteOptimizer() {
       )}
 
       {/* Footer */}
-      <div className="bg-gradient-to-r from-amber-800 via-orange-800 to-red-800 text-white p-4 mt-12">
+      <div className="bg-gradient-to-r from-amber-800 via-orange-800 to-red-800 text-white p-4 mt-12 ">
         <div className="max-w-7xl mx-auto text-center text-sm opacity-90">
           🐪 Desert Route Optimizer - Multi-stop journey planning • Powered by
-          OpenStreetMap & OSRM TSP Algorithm
+          OpenStreetMap & OSRM TSP Algorithm • Lakshit and Ayush
         </div>
       </div>
     </div>
