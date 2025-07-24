@@ -14,12 +14,12 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     const users = JSON.parse(localStorage.getItem("users") || "[]");
-    if (users.find((u: any) => u.email === email)) {
+    if (users.find((u) => u.email === email)) {
       setError("User already exists");
       setLoading(false);
       return;
