@@ -19,9 +19,10 @@ import {
 import dynamic from "next/dynamic";
 import { RouteHopCard } from "@/components/route-hop-card";
 import { RouteSummary } from "@/components/route-summary";
-import clsx from "clsx";
+import clsx from "clsx"; // optional, makes class toggling easier
 import { useRouter } from "next/navigation";
 
+// Dynamically import the map component to avoid SSR issues
 const MapComponent = dynamic(() => import("@/components/map-component"), {
   ssr: false,
   loading: () => (
@@ -31,10 +32,44 @@ const MapComponent = dynamic(() => import("@/components/map-component"), {
   ),
 });
 
+interface Location {
+  name: string;
+  display_name: string;
+  lat: number;
+  lng: number;
+  place_id?: string;
+}
+
+interface Waypoint {
+  id: string;
+  location: Location | null;
+  query: string;
+  suggestions: Location[];
+  type: "start" | "hop" | "destination";
+  isSearching: boolean;
+}
+
+interface OptimizedWaypoint {
+  location: Location;
+  distance_from_previous: string;
+  duration_from_previous: string;
+  waypoint_index: number;
+  optimized_order: number;
+  original_waypoint_id: string;
+  waypoint_type: "start" | "hop" | "destination";
+}
+
+interface OptimizedRoute {
+  distance: string;
+  duration: string;
+  coordinates: Array<[number, number]>;
+  waypoints: OptimizedWaypoint[];
+}
+
 const MAX_HOPS = 10;
 
 export default function DesertRouteOptimizer() {
-  const [waypoints, setWaypoints] = useState([
+  const [waypoints, setWaypoints] = useState<Waypoint[]>([
     {
       id: "start",
       location: null,
@@ -52,16 +87,17 @@ export default function DesertRouteOptimizer() {
       isSearching: false,
     },
   ]);
-  const [optimizedRoute, setOptimizedRoute] = useState(null);
+  const [optimizedRoute, setOptimizedRoute] = useState<OptimizedRoute | null>(
+    null
+  );
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [duplicateWarning, setDuplicateWarning] = useState(null);
-  const searchTimeoutRef = useRef({});
+  const [error, setError] = useState<string | null>(null);
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+  const searchTimeoutRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
   const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [saveStatus, setSaveStatus] = useState(null);
+  const [saveStatus, setSaveStatus] = useState<null | "success" | "error" | "saving">(null);
   const [saveError, setSaveError] = useState("");
-  const [theme, setTheme] = useState("dark");
 
   useEffect(() => {
     setIsLoggedIn(!!localStorage.getItem("currentUser"));
@@ -74,8 +110,9 @@ export default function DesertRouteOptimizer() {
   };
 
   const hopCount = waypoints.filter((w) => w.type === "hop").length;
+  const [theme, setTheme] = useState<"bright" | "dark">("dark");
 
-  const themeColors = {
+  const themeColors: Record<string, string> = {
     bright: "bg-[#f07c4a]",
     dark: "bg-[#1f1a1f]",
   };
@@ -99,13 +136,23 @@ export default function DesertRouteOptimizer() {
     }
   };
 
-  const checkForDuplicates = (newLocation, excludeId) => {
+  // Check for duplicate locations
+  const checkForDuplicates = (
+    newLocation: Location,
+    excludeId?: string
+  ): boolean => {
     return waypoints.some((w) => {
+      // Skip current waypoint
       if (w.id === excludeId) return false;
+
+      // Only check for duplicates among hops
       if (w.type !== "hop") return false;
+
       if (!w.location) return false;
+
       const latDiff = Math.abs(w.location.lat - newLocation.lat);
       const lngDiff = Math.abs(w.location.lng - newLocation.lng);
+
       return latDiff < 0.001 && lngDiff < 0.001;
     });
   };
@@ -113,31 +160,44 @@ export default function DesertRouteOptimizer() {
   const handleSwapStartEnd = () => {
     setWaypoints((prevWaypoints) => {
       const startIndex = prevWaypoints.findIndex((w) => w.type === "start");
-      const destIndex = prevWaypoints.findIndex((w) => w.type === "destination");
+      const destIndex = prevWaypoints.findIndex(
+        (w) => w.type === "destination"
+      );
+
       if (startIndex === -1 || destIndex === -1) return prevWaypoints;
+
       const newWaypoints = [...prevWaypoints];
+
+      // Swap all relevant fields (not just location)
       const temp = { ...newWaypoints[startIndex] };
+
       newWaypoints[startIndex] = {
         ...newWaypoints[destIndex],
         type: "start",
-        id: "start",
+        id: "start", // ensure ID stays consistent if needed
       };
+
       newWaypoints[destIndex] = {
         ...temp,
         type: "destination",
         id: "destination",
       };
+
       return newWaypoints;
     });
   };
 
+  // Add a new hop
   const addHop = () => {
     if (hopCount >= MAX_HOPS) return;
+
+    // Prevent adding a new hop if there's already an empty one
     const hasEmptyHop = waypoints.some(
       (w) => w.type === "hop" && (!w.query || w.query.trim() === "")
     );
     if (hasEmptyHop) return;
-    const newHop = {
+
+    const newHop: Waypoint = {
       id: `hop-${Date.now()}-${Math.random()}`,
       location: null,
       query: "",
@@ -145,6 +205,7 @@ export default function DesertRouteOptimizer() {
       type: "hop",
       isSearching: false,
     };
+
     setWaypoints((prev) => {
       const destinationIndex = prev.findIndex((w) => w.type === "destination");
       const newWaypoints = [...prev];
@@ -153,19 +214,23 @@ export default function DesertRouteOptimizer() {
     });
   };
 
-  const removeHop = (id) => {
+  // Remove a hop
+  const removeHop = (id: string) => {
     setWaypoints((prev) => prev.filter((w) => w.id !== id));
     setOptimizedRoute(null);
     setDuplicateWarning(null);
   };
 
-  const searchPlaces = async (query, waypointId) => {
+  // Search places with debouncing
+  const searchPlaces = async (query: string, waypointId: string) => {
     try {
       const response = await fetch(
         `/api/nominatim/search?q=${encodeURIComponent(query)}`
       );
       const data = await response.json();
+
       if (data.error) {
+        console.error("Search error:", data.error);
         setWaypoints((prev) =>
           prev.map((w) =>
             w.id === waypointId
@@ -175,13 +240,15 @@ export default function DesertRouteOptimizer() {
         );
         return;
       }
-      const locations = data.results.map((result) => ({
+
+      const locations: Location[] = data.results.map((result: any) => ({
         name: result.name || result.display_name.split(",")[0],
         display_name: result.display_name,
         lat: Number.parseFloat(result.lat),
         lng: Number.parseFloat(result.lon),
         place_id: result.place_id,
       }));
+
       setWaypoints((prev) =>
         prev.map((w) =>
           w.id === waypointId
@@ -190,6 +257,7 @@ export default function DesertRouteOptimizer() {
         )
       );
     } catch (error) {
+      console.error("Search error:", error);
       setWaypoints((prev) =>
         prev.map((w) =>
           w.id === waypointId
@@ -200,7 +268,8 @@ export default function DesertRouteOptimizer() {
     }
   };
 
-  const updateWaypointQuery = (id, query) => {
+  // Update waypoint query
+  const updateWaypointQuery = (id: string, query: string) => {
     setWaypoints((prev) =>
       prev.map((w) =>
         w.id === id
@@ -210,9 +279,11 @@ export default function DesertRouteOptimizer() {
     );
     setError(null);
     setDuplicateWarning(null);
+
     if (searchTimeoutRef.current[id]) {
       clearTimeout(searchTimeoutRef.current[id]);
     }
+
     if (query.length >= 3) {
       setWaypoints((prev) =>
         prev.map((w) => (w.id === id ? { ...w, isSearching: true } : w))
@@ -229,13 +300,15 @@ export default function DesertRouteOptimizer() {
     }
   };
 
-  const selectLocation = (waypointId, location) => {
+  // Select location for waypoint
+  const selectLocation = (waypointId: string, location: Location) => {
     if (checkForDuplicates(location, waypointId)) {
       setDuplicateWarning(
         `"${location.name}" is already selected as another hop. Please choose a different location.`
       );
       return;
     }
+
     setWaypoints((prev) =>
       prev.map((w) =>
         w.id === waypointId
@@ -253,111 +326,116 @@ export default function DesertRouteOptimizer() {
     setDuplicateWarning(null);
   };
 
+  // Calculate optimized route
   const calculateOptimizedRoute = async () => {
     const locationsWithWaypoints = waypoints.filter((w) => w.location !== null);
+
     if (locationsWithWaypoints.length < 2) {
       setError("Please select at least a start and destination location");
       return;
     }
+
     const startLocation = waypoints.find((w) => w.type === "start")?.location;
-    const destinationLocation = waypoints.find((w) => w.type === "destination")?.location;
+    const destinationLocation = waypoints.find(
+      (w) => w.type === "destination"
+    )?.location;
+
     if (!startLocation || !destinationLocation) {
       setError("Please select both start and destination locations");
       return;
     }
+
     setIsLoading(true);
     setError(null);
+
     try {
+      // Create a mapping of coordinates to original waypoints
       const coordinateToWaypointMap = new Map();
       locationsWithWaypoints.forEach((waypoint) => {
-        const key = `${waypoint.location.lng.toFixed(6)},${waypoint.location.lat.toFixed(6)}`;
+        const key = `${waypoint.location!.lng.toFixed(
+          6
+        )},${waypoint.location!.lat.toFixed(6)}`;
         coordinateToWaypointMap.set(key, waypoint);
       });
+
+      // Prepare coordinates for OSRM trip endpoint
       const coordinates = locationsWithWaypoints
-        .map((w) => `${w.location.lng},${w.location.lat}`)
+        .map((w) => `${w.location!.lng},${w.location!.lat}`)
         .join(";");
+
       const response = await fetch(
         `/api/osrm/trip?coordinates=${encodeURIComponent(coordinates)}`
       );
       const data = await response.json();
+
       if (data.error) {
         setError(data.error);
         setIsLoading(false);
         return;
       }
-      const optimizedWaypoints = data.waypoints.map((osrmWp, optimizedIdx) => {
-        const wpLat = osrmWp.location.lat;
-        const wpLng = osrmWp.location.lng;
-        const coordKey = `${wpLng.toFixed(6)},${wpLat.toFixed(6)}`;
-        let matched = coordinateToWaypointMap.get(coordKey);
-        if (!matched) {
-          let bestDist = Number.MAX_VALUE;
-          locationsWithWaypoints.forEach((orig) => {
-            const dLat = orig.location.lat - wpLat;
-            const dLng = orig.location.lng - wpLng;
-            const dist = dLat * dLat + dLng * dLng;
-            if (dist < bestDist) {
-              bestDist = dist;
-              matched = orig;
-            }
-          });
+
+      // Map the OSRM response back to our original waypoints in the OPTIMIZED order
+      const optimizedWaypoints: OptimizedWaypoint[] = data.waypoints.map(
+        (osrmWp: any, optimizedIdx: number) => {
+          // OSRM waypoint coordinates
+          const wpLat = osrmWp.location.lat;
+          const wpLng = osrmWp.location.lng;
+
+          // ⚡ FAST lookup (exact-round match)  ──────────────
+          const coordKey = `${wpLng.toFixed(6)},${wpLat.toFixed(6)}`;
+          let matched = coordinateToWaypointMap.get(coordKey) as
+            | Waypoint
+            | undefined;
+
+          // 🔍 If not an exact match, fall back to nearest waypoint (≤0.01° ≈1 km)
+          if (!matched) {
+            let bestDist = Number.MAX_VALUE;
+            locationsWithWaypoints.forEach((orig) => {
+              const dLat = orig.location!.lat - wpLat;
+              const dLng = orig.location!.lng - wpLng;
+              const dist = dLat * dLat + dLng * dLng;
+              if (dist < bestDist) {
+                bestDist = dist;
+                matched = orig;
+              }
+            });
+          }
+
+          // 🛡️ Final safety: if STILL not found, build a dummy waypoint so we never hit “null.location”
+          const safeLoc = matched?.location ?? {
+            name: `Stop ${optimizedIdx + 1}`,
+            display_name: `Unnamed stop ${optimizedIdx + 1}`,
+            lat: wpLat,
+            lng: wpLng,
+          };
+
+          return {
+            location: safeLoc,
+            distance_from_previous: osrmWp.distance_from_previous ?? "0 km",
+            duration_from_previous: osrmWp.duration_from_previous ?? "0 min",
+            waypoint_index: osrmWp.waypoint_index ?? optimizedIdx,
+            optimized_order: optimizedIdx,
+            original_waypoint_id: matched?.id ?? `osrm-${optimizedIdx}`,
+            waypoint_type: matched?.type ?? "hop",
+          };
         }
-        const safeLoc = matched?.location ?? {
-          name: `Stop ${optimizedIdx + 1}`,
-          display_name: `Unnamed stop ${optimizedIdx + 1}`,
-          lat: wpLat,
-        };
-        return {
-          location: safeLoc,
-          distance_from_previous: osrmWp.distance_from_previous ?? "0 km",
-          duration_from_previous: osrmWp.duration_from_previous ?? "0 min",
-          waypoint_index: osrmWp.waypoint_index ?? optimizedIdx,
-          optimized_order: optimizedIdx,
-          original_waypoint_id: matched?.id ?? `osrm-${optimizedIdx}`,
-          waypoint_type: matched?.type ?? "hop",
-        };
-      });
+      );
+
       setOptimizedRoute({
         distance: data.distance,
         duration: data.duration,
         coordinates: data.coordinates,
-        waypoints: optimizedWaypoints,
+        waypoints: optimizedWaypoints, // Already in optimized order
       });
     } catch (error) {
+      console.error("Route optimization error:", error);
       setError("Failed to optimize route. Please try again.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  const getWaypointColor = (type) => {
-    switch (type) {
-      case "start":
-        return "text-green-500";
-      case "destination":
-        return "text-red-500";
-      default:
-        return "text-amber-500";
-    }
-  };
-
-  const getWaypointLabel = (waypoint, index) => {
-    switch (waypoint.type) {
-      case "start":
-        return "Start";
-      case "destination":
-        return "End";
-      default:
-        return `Hop ${waypoints.filter((w) => w.type === "hop").indexOf(waypoint) + 1}`;
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      Object.values(searchTimeoutRef.current).forEach(clearTimeout);
-    };
-  }, []);
-
+  // Add this function inside the component
   const handleSaveTrip = () => {
     setSaveStatus("saving");
     setSaveError("");
@@ -372,18 +450,51 @@ export default function DesertRouteOptimizer() {
       user.trips = user.trips || [];
       user.trips.push(optimizedRoute);
       localStorage.setItem("currentUser", JSON.stringify(user));
+      // Also update in users array
       const users = JSON.parse(localStorage.getItem("users") || "[]");
-      const idx = users.findIndex((u) => u.email === user.email);
+      const idx = users.findIndex((u: any) => u.email === user.email);
       if (idx !== -1) {
         users[idx] = user;
         localStorage.setItem("users", JSON.stringify(users));
       }
       setSaveStatus("success");
-    } catch (err) {
+    } catch (err: any) {
       setSaveStatus("error");
       setSaveError(err.message);
     }
   };
+
+  // Get waypoint icon color
+  const getWaypointColor = (type: string) => {
+    switch (type) {
+      case "start":
+        return "text-green-500";
+      case "destination":
+        return "text-red-500";
+      default:
+        return "text-amber-500";
+    }
+  };
+
+  // Get waypoint label
+  const getWaypointLabel = (waypoint: Waypoint, index: number) => {
+    switch (waypoint.type) {
+      case "start":
+        return "Start";
+      case "destination":
+        return "End";
+      default:
+        return `Hop ${
+          waypoints.filter((w) => w.type === "hop").indexOf(waypoint) + 1
+        }`;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      Object.values(searchTimeoutRef.current).forEach(clearTimeout);
+    };
+  }, []);
 
   return (
     <div className={`flex flex-col min-h-screen ${getBackgroundClass()}`}>
@@ -391,14 +502,14 @@ export default function DesertRouteOptimizer() {
       <div className={` text-white p-6 shadow-lg ${getHeaderClass()}`}>
         <div className="max-w-7xl mx-auto flex items-center gap-3">
           <Camel className="w-8 h-8" />
-          <h1 className="text-3xl font-bold">Hops On The Way</h1>
+          <h1 className="text-3xl font-bold">SmartPath Planner</h1>
           <div className="ml-auto text-sm opacity-90">
             Multi-stop journey planner
           </div>
           <div className="ml-auto flex items-center space-x-3">
             {/* Toggle buttons */}
             <div className="flex bg-transparent rounded-full shadow-inner p-1 text-xs">
-              {["bright", "dark"].map((mode) => (
+              {(["bright", "dark"] as const).map((mode) => (
                 <button
                   key={mode}
                   onClick={() => setTheme(mode)}
@@ -440,6 +551,7 @@ export default function DesertRouteOptimizer() {
           </div>
         </div>
       </div>
+
       <div className="flex-grow max-w-7xl mx-auto p-6 grid lg:grid-cols-3 gap-6">
         {/* Waypoints Panel */}
         <div className="lg:col-span-1 space-y-4">
@@ -451,6 +563,7 @@ export default function DesertRouteOptimizer() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-4 space-y-4">
+              {/* Algorithm Info */}
               <Alert className="border-blue-200 bg-blue-50">
                 <Info className="h-4 w-4 text-blue-600" />
                 <AlertDescription className="text-blue-800 text-sm">
@@ -460,6 +573,8 @@ export default function DesertRouteOptimizer() {
                   locations.
                 </AlertDescription>
               </Alert>
+
+              {/* Waypoints */}
               {waypoints.map((waypoint, index) => (
                 <div key={waypoint.id} className="relative">
                   <div className="flex items-center gap-2 mb-2">
@@ -479,6 +594,7 @@ export default function DesertRouteOptimizer() {
                         <X className="w-3 h-3" />
                       </Button>
                     )}
+
                     {waypoint.type === "start" && (
                       <Button
                         onClick={() => handleSwapStartEnd()}
@@ -490,11 +606,14 @@ export default function DesertRouteOptimizer() {
                       </Button>
                     )}
                   </div>
+
                   <div className="relative">
                     <Input
                       key={`input-${waypoint.id}`}
                       value={waypoint.query}
-                      onChange={(e) => updateWaypointQuery(waypoint.id, e.target.value)}
+                      onChange={(e) =>
+                        updateWaypointQuery(waypoint.id, e.target.value)
+                      }
                       placeholder={`Enter ${
                         waypoint.type === "start"
                           ? "starting"
@@ -505,39 +624,49 @@ export default function DesertRouteOptimizer() {
                       className="border-amber-200 focus:border-amber-400 focus:ring-amber-400"
                       autoComplete="off"
                     />
+
                     {waypoint.isSearching && (
                       <div className="absolute right-3 top-3">
                         <div className="w-4 h-4 border-2 border-amber-300 border-t-amber-600 rounded-full animate-spin" />
                       </div>
                     )}
+
                     {waypoint.suggestions.length > 0 && (
                       <div className="absolute z-10 w-full mt-1 bg-white border border-amber-200 rounded-md shadow-lg animate-in fade-in-0 slide-in-from-top-2">
-                        {waypoint.suggestions.map((suggestion, suggestionIndex) => (
-                          <button
-                            key={`${waypoint.id}-suggestion-${suggestionIndex}`}
-                            onClick={() => selectLocation(waypoint.id, suggestion)}
-                            className="w-full px-3 py-2 text-left hover:bg-amber-50 first:rounded-t-md last:rounded-b-md transition-colors"
-                          >
-                            <div className="flex items-center gap-2">
-                              <MapPin
-                                className={`w-3 h-3 ${getWaypointColor(waypoint.type)} flex-shrink-0`}
-                              />
-                              <div className="min-w-0">
-                                <div className="font-medium text-sm truncate">
-                                  {suggestion.name}
-                                </div>
-                                <div className="text-xs text-gray-500 truncate">
-                                  {suggestion.display_name}
+                        {waypoint.suggestions.map(
+                          (suggestion, suggestionIndex) => (
+                            <button
+                              key={`${waypoint.id}-suggestion-${suggestionIndex}`}
+                              onClick={() =>
+                                selectLocation(waypoint.id, suggestion)
+                              }
+                              className="w-full px-3 py-2 text-left hover:bg-amber-50 first:rounded-t-md last:rounded-b-md transition-colors"
+                            >
+                              <div className="flex items-center gap-2">
+                                <MapPin
+                                  className={`w-3 h-3 ${getWaypointColor(
+                                    waypoint.type
+                                  )} flex-shrink-0`}
+                                />
+                                <div className="min-w-0">
+                                  <div className="font-medium text-sm truncate">
+                                    {suggestion.name}
+                                  </div>
+                                  <div className="text-xs text-gray-500 truncate">
+                                    {suggestion.display_name}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          </button>
-                        ))}
+                            </button>
+                          )
+                        )}
                       </div>
                     )}
                   </div>
                 </div>
               ))}
+
+              {/* Add Hop Button */}
               {hopCount < MAX_HOPS && (
                 <Button
                   onClick={addHop}
@@ -548,6 +677,8 @@ export default function DesertRouteOptimizer() {
                   Add Hop ({hopCount}/{MAX_HOPS})
                 </Button>
               )}
+
+              {/* Optimize Route Button */}
               <Button
                 onClick={calculateOptimizedRoute}
                 disabled={
@@ -567,6 +698,8 @@ export default function DesertRouteOptimizer() {
                   </div>
                 )}
               </Button>
+
+              {/* Duplicate Warning */}
               {duplicateWarning && (
                 <Alert className="border-orange-200 bg-orange-50">
                   <AlertTriangle className="h-4 w-4 text-orange-600" />
@@ -575,6 +708,8 @@ export default function DesertRouteOptimizer() {
                   </AlertDescription>
                 </Alert>
               )}
+
+              {/* Error Display */}
               {error && (
                 <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg animate-in fade-in-0">
                   <div className="flex items-center gap-2">
@@ -585,6 +720,8 @@ export default function DesertRouteOptimizer() {
               )}
             </CardContent>
           </Card>
+
+          {/* Route Summary */}
           {optimizedRoute && <RouteSummary route={optimizedRoute} />}
           {optimizedRoute && isLoggedIn && (
             <div className="mt-4">
@@ -593,11 +730,7 @@ export default function DesertRouteOptimizer() {
                 disabled={saveStatus === "saving"}
                 className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white"
               >
-                {saveStatus === "saving"
-                  ? "Saving..."
-                  : saveStatus === "success"
-                  ? "Trip Saved!"
-                  : "Save Trip"}
+                {saveStatus === "saving" ? "Saving..." : saveStatus === "success" ? "Trip Saved!" : "Save Trip"}
               </Button>
               {saveStatus === "error" && (
                 <Alert className="border-red-200 bg-red-50 mt-2">
@@ -612,6 +745,8 @@ export default function DesertRouteOptimizer() {
             </div>
           )}
         </div>
+
+        {/* Map Panel */}
         <div className="lg:col-span-2">
           <Card className="bg-white/80 backdrop-blur-sm border-amber-200 shadow-xl">
             <CardHeader className="bg-gradient-to-r from-orange-100 to-red-100 rounded-t-lg">
@@ -630,7 +765,9 @@ export default function DesertRouteOptimizer() {
           </Card>
         </div>
       </div>
-      {optimizedRoute && optimizedRoute.waypoints && optimizedRoute.waypoints.length > 0 && (
+
+      {/* Optimized Route Order */}
+      {optimizedRoute && optimizedRoute.waypoints.length > 0 && (
         <div className="max-w-7xl mx-auto px-6 pb-6">
           <Card className="bg-white/80 backdrop-blur-sm border-amber-200 shadow-xl">
             <CardHeader className="bg-gradient-to-r from-green-100 to-emerald-100 rounded-t-lg">
@@ -644,7 +781,9 @@ export default function DesertRouteOptimizer() {
                 <Info className="h-4 w-4 text-green-600" />
                 <AlertDescription className="text-green-800">
                   <strong>Follow this exact order</strong> to achieve the
-                  minimum total distance of {optimizedRoute.distance} in {optimizedRoute.duration}. This sequence is
+                  minimum total distance of{" "}
+                  <strong>{optimizedRoute.distance}</strong> in{" "}
+                  <strong>{optimizedRoute.duration}</strong>. This sequence is
                   optimized by the TSP algorithm.
                 </AlertDescription>{" "}
                 by OpenStreetMap & OSRM TSP Algorithm
@@ -663,10 +802,14 @@ export default function DesertRouteOptimizer() {
           </Card>
         </div>
       )}
-      <div className="max-w-7xl mx-auto text-center text-sm opacity-90">
-        🐪 Desert Route Optimizer - Multi-stop journey planning • Powered by
-        OpenStreetMap & OSRM TSP Algorithm • Lakshit and Ayush
+
+      {/* Footer */}
+      <div className="bg-gradient-to-r from-amber-800 via-orange-800 to-red-800 text-white p-4 mt-12 ">
+        <div className="max-w-7xl mx-auto text-center text-sm opacity-90">
+          🐪 Desert Route Optimizer - Multi-stop journey planning • Powered by
+          OpenStreetMap & OSRM TSP Algorithm • Lakshit and Ayush
+        </div>
       </div>
     </div>
   );
-} 
+}

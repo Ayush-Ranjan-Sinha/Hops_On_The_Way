@@ -6,13 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Calendar, MapPin, Timer, Route, CaravanIcon as Camel, List } from "lucide-react";
 
-function formatDate(dateStr) {
+function formatDate(dateStr: string) {
   const d = new Date(dateStr);
   return d.toLocaleString();
 }
 
 export default function SavedTripsPage() {
-  const [trips, setTrips] = useState([]);
+  const [trips, setTrips] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const router = useRouter();
@@ -57,7 +57,7 @@ export default function SavedTripsPage() {
                     user.trips[i].savedAt = date;
                     localStorage.setItem("currentUser", JSON.stringify(user));
                     const users = JSON.parse(localStorage.getItem("users") || "[]");
-                    const idx = users.findIndex((u) => u.email === user.email);
+                    const idx = users.findIndex((u: any) => u.email === user.email);
                     if (idx !== -1) {
                       users[idx] = user;
                       localStorage.setItem("users", JSON.stringify(users));
@@ -69,7 +69,7 @@ export default function SavedTripsPage() {
                 const stops = trip.waypoints && trip.waypoints.length > 2
                   ? trip.waypoints
                       .slice(1, -1)
-                      .map((wp) => wp.location?.name)
+                      .map((wp: any) => wp.location?.name)
                       .filter(Boolean)
                       .join(", ")
                   : "None";
