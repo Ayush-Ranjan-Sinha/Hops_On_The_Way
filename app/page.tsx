@@ -20,6 +20,7 @@ import dynamic from "next/dynamic";
 import { RouteHopCard } from "@/components/route-hop-card";
 import { RouteSummary } from "@/components/route-summary";
 import clsx from "clsx"; // optional, makes class toggling easier
+import { useRouter } from "next/navigation";
 
 // Dynamically import the map component to avoid SSR issues
 const MapComponent = dynamic(() => import("@/components/map-component"), {
@@ -93,9 +94,23 @@ export default function DesertRouteOptimizer() {
   const [error, setError] = useState<string | null>(null);
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const searchTimeoutRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
+  const router = useRouter();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<null | "success" | "error" | "saving">(null);
+  const [saveError, setSaveError] = useState("");
+
+  useEffect(() => {
+    setIsLoggedIn(!!localStorage.getItem("currentUser"));
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem("currentUser");
+    setIsLoggedIn(false);
+    router.push("/login");
+  };
 
   const hopCount = waypoints.filter((w) => w.type === "hop").length;
-  const [theme, setTheme] = useState<"bright" | "dark">("bright");
+  const [theme, setTheme] = useState<"bright" | "dark">("dark");
 
   const themeColors: Record<string, string> = {
     bright: "bg-[#f07c4a]",
@@ -420,6 +435,35 @@ export default function DesertRouteOptimizer() {
     }
   };
 
+  // Add this function inside the component
+  const handleSaveTrip = () => {
+    setSaveStatus("saving");
+    setSaveError("");
+    try {
+      const userStr = localStorage.getItem("currentUser");
+      if (!userStr) {
+        setSaveStatus("error");
+        setSaveError("You must be logged in to save trips.");
+        return;
+      }
+      const user = JSON.parse(userStr);
+      user.trips = user.trips || [];
+      user.trips.push(optimizedRoute);
+      localStorage.setItem("currentUser", JSON.stringify(user));
+      // Also update in users array
+      const users = JSON.parse(localStorage.getItem("users") || "[]");
+      const idx = users.findIndex((u: any) => u.email === user.email);
+      if (idx !== -1) {
+        users[idx] = user;
+        localStorage.setItem("users", JSON.stringify(users));
+      }
+      setSaveStatus("success");
+    } catch (err: any) {
+      setSaveStatus("error");
+      setSaveError(err.message);
+    }
+  };
+
   // Get waypoint icon color
   const getWaypointColor = (type: string) => {
     switch (type) {
@@ -458,11 +502,10 @@ export default function DesertRouteOptimizer() {
       <div className={` text-white p-6 shadow-lg ${getHeaderClass()}`}>
         <div className="max-w-7xl mx-auto flex items-center gap-3">
           <Camel className="w-8 h-8" />
-          <h1 className="text-3xl font-bold">Hops On The Way</h1>
+          <h1 className="text-3xl font-bold">SmartPath Planner</h1>
           <div className="ml-auto text-sm opacity-90">
             Multi-stop journey planner
           </div>
-
           <div className="ml-auto flex items-center space-x-3">
             {/* Toggle buttons */}
             <div className="flex bg-transparent rounded-full shadow-inner p-1 text-xs">
@@ -481,6 +524,30 @@ export default function DesertRouteOptimizer() {
                 </button>
               ))}
             </div>
+            {/* Auth buttons */}
+            {isLoggedIn ? (
+              <>
+                <button
+                  onClick={() => router.push("/saved-trips")}
+                  className="ml-4 px-4 py-2 rounded-lg shadow-sm bg-gradient-to-r from-gray-800 to-gray-700 hover:from-gray-700 hover:to-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 transition text-white font-semibold"
+                >
+                  Saved Trips
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="ml-2 px-4 py-2 rounded-lg shadow-sm bg-gradient-to-r from-red-600 to-red-500 hover:from-red-700 hover:to-red-600 focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2 transition text-white font-semibold"
+                >
+                  Logout
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => router.push("/login")}
+                className="ml-4 px-4 py-2 rounded-lg shadow-sm bg-gradient-to-r from-gray-800 to-gray-700 hover:from-gray-700 hover:to-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 transition text-white font-semibold"
+              >
+                Login
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -656,6 +723,27 @@ export default function DesertRouteOptimizer() {
 
           {/* Route Summary */}
           {optimizedRoute && <RouteSummary route={optimizedRoute} />}
+          {optimizedRoute && isLoggedIn && (
+            <div className="mt-4">
+              <Button
+                onClick={handleSaveTrip}
+                disabled={saveStatus === "saving"}
+                className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white"
+              >
+                {saveStatus === "saving" ? "Saving..." : saveStatus === "success" ? "Trip Saved!" : "Save Trip"}
+              </Button>
+              {saveStatus === "error" && (
+                <Alert className="border-red-200 bg-red-50 mt-2">
+                  <AlertDescription className="text-red-800 text-sm">{saveError}</AlertDescription>
+                </Alert>
+              )}
+              {saveStatus === "success" && (
+                <Alert className="border-green-200 bg-green-50 mt-2">
+                  <AlertDescription className="text-green-800 text-sm">Trip saved successfully!</AlertDescription>
+                </Alert>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Map Panel */}
